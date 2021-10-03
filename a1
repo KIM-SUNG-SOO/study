@@ -2,6 +2,7 @@ import pyupbit
 import time
 import datetime
 import itertools
+import schedule
 
 from collections import deque
 
@@ -123,7 +124,7 @@ def ck_day():
                 time.sleep(0.2)
                 df = pyupbit.get_ohlcv(coin,"day", count=3)
                 time.sleep(0.2)
-                cc = sum(df['close']) / 3 / 1.03
+                cc = sum(df['close']) / 3 / 1.015
                 if price <= cc:
                     od = upbit.get_balance(coin)
                     upbit.cancel_order(od[0]['uuid'])
@@ -134,19 +135,88 @@ def ck_day():
 
     return targets
 
+def ck_min(tickers):
+    global prices, stay, ohv, chv, lost, buy_flag, umount, now
+
+    for coin in tickers:
+        chv[coin].append(prices[coin])
+
+        val = upbit.get_balance(coin)
+        time.sleep(0.2)
+        if val > 0:
+            stay[coin][0] = 1
+            #로그 확인용
+            print(coin, stay[coin])
+        else:
+            stay[coin][0] = 0
+
+
+    t = upbit.get_balances()
+    time.sleep(0.2)
+
+    c = len(t)  # 현재 보유중 이라면
+    tx = "KRW-"
+    for i in range(c):
+
+        if t[i]['unit_currency'] == 'KRW' and t[i]['currency'] != 'KRW' and t[i]['currency'] != 'VTHO':
+            coin = tx + t[i]['currency']
+            locked = float(t[i]['locked'])
+            buy_price = float(t[i]['avg_buy_price'])
+
+            if coin in tickers and coin != "KRW-VTHO":
+                if locked > 0 and buy_price <= 3000:
+                    lost.append([ coin, now + datetime.timedelta(minutes=1) ])
+
+
+def ck_hour(tickers):
+    global prices, stay, ohv, chv, lost, buy_flag, umount, now
+    for coin in tickers:
+        ohv[coin].append(prices[coin])
+        if stay[coin][0] > 0:
+            if stay[coin][4] <= prices[coin] * 1.03:
+                hma30 = sum(list(itertools.islice(ohv[coin], 120 - 30, 120))) / 30
+                if prices[coin] >= hma30:
+                    val = upbit.get_balance(coin)
+                    time.sleep(0.2)
+                    sell_limit_order(coin, stay[coin][4] * 1.012, val)
+                    stay[coin][0] = 0
+                else:
+                    sd = sell_exe(coin)
+                    stay[coin][0] = 0
+                    buy_flag += 1
+                    time.sleep(1)
+
+                    if 'uuid' in sd:
+                        lost.append([coin, now + datetime.timedelta(hours=5)])
+                        stay[coin][2], stay[coin][3], stay[coin][4] = prices[coin], prices[coin], prices[coin]
+                        cash = upbit.get_balance()
+                        time.sleep(0.2)
+                        umount = round(cash / (buy_flag + 1) / 1000) * 1000  # 15개만사자
+                        if umount < 6000:
+                            umount = 6000
+
+                        print(f"매도: {coin} {stay[coin]}")
+                    else:
+                        stay[coin][0] = 1
+                        buy_flag -= 1
+
+                buy_flag += 1
 
 def worker(tickers):
-
+    global prices, stay, ohv, chv, lost, buy_flag, umount, now
     # 매매 초기값 세팅
     lost = []
     stay, ohv, chv = {}, {}, {}
 
     cash = upbit.get_balance()
 
-    buy_flag = 15
+    buy_flag = 20
 
     prices = get_prices(tickers)
     time.sleep(0.2)
+
+    schedule.every().minute.at(":02").do(lambda: ck_min(tickers))
+    schedule.every().hour.at("00:05").do(lambda: ck_hour(tickers))
 
     for coin in tickers:
 
@@ -195,7 +265,7 @@ def worker(tickers):
 
                 print(f'{coin} {stay[coin]}')
 
-    tic = 1
+
     now = datetime.datetime.now()
     umount = round(cash / (buy_flag + 1) / 1000) * 1000  # 15개만사자
     if umount < 6000:
@@ -205,7 +275,7 @@ def worker(tickers):
     while True:
 
         now = datetime.datetime.now()
-
+        schedule.run_pending()
         prices = get_prices(tickers)
         time.sleep(0.2)
 
@@ -284,9 +354,11 @@ def worker(tickers):
 
             if is_buy == True:
                 if len(lost) > 0:
-                    for i in range(len(lost)):
-                        if lost[i][0] == coin:
+                    for k in lost:
+                        if k[0] == coin:
                             is_buy = False
+                        else:
+                            continue
 
 
             if stay[coin][0] == 1:
@@ -319,8 +391,16 @@ def worker(tickers):
                     else:
                         buy_price = i_price / c
 
-                    stay[coin][0] = 1
-                    stay[coin][2],stay[coin][3],stay[coin][4] = buy_price,buy_price,buy_price
+                    if buy_price < 3000:
+                        sell_price = buy_price * 1.012
+                        sell_limit_order(coin, sell_price, qty)
+                        time.sleep(0.2)
+                        buy_flag += 1
+                        lost.append([ coin, now + datetime.timedelta(minutes=1) ])
+
+                    else:
+                        stay[coin][0] = 1
+                        stay[coin][2],stay[coin][3],stay[coin][4] = buy_price,buy_price,buy_price
 
                     print("매수:", coin, stay[coin])
 
@@ -350,69 +430,12 @@ def worker(tickers):
                     stay[coin][0] = 1
                     buy_flag -= 1
 
-        if tic % 10 == 0:
-            print("\n", now)
-            dd_list = []
-            for coin in tickers:
-                if stay[coin][0] > 0:
-                    #print(coin, stay[coin])
-
-                    for i in range(len(lost)):
-                        if lost[i][0] == coin and lost[i][1] <= now:
-                            dd_list.append(i)
-
-            if len(dd_list) > 0:
-                for i in dd_list:
-                    del lost[i]
-
-        if tic % 50 == 0:
-            for coin in tickers:
-                chv[coin].append(prices[coin])
-
-                val = upbit.get_balance(coin)
-                time.sleep(0.2)
-                if val > 0:
-                    stay[coin][0] = 1
-                else:
-                    stay[coin][0] = 0
-
-        if tic == 3000:
-            for coin in tickers:
-                ohv[coin].append(prices[coin])
-                if stay[coin][0] > 0:
-                    if stay[coin][5] <= -3.0:
-                        hma30 = sum(list(itertools.islice(ohv[coin], 120 - 30, 120))) / 30
-                        if prices[coin] >= hma30:
-                            val = upbit.get_balance(coin)
-                            time.sleep(0.2)
-                            sell_limit_order(coin, stay[coin][4]*1.012, val)
-                            stay[coin][0] = 0
-                        else:
-                            sd = sell_exe(coin)
-                            stay[coin][0] = 0
-                            buy_flag += 1
-                            time.sleep(1)
-
-                            if 'uuid' in sd:
-                                lost.append([coin, now + datetime.timedelta(hours=5)])
-                                stay[coin][2], stay[coin][3], stay[coin][4] = prices[coin], prices[coin], prices[coin]
-                                cash = upbit.get_balance()
-                                time.sleep(0.2)
-                                umount = round(cash / (buy_flag + 1) / 1000) * 1000  # 15개만사자
-                                if umount < 6000:
-                                    umount = 6000
-
-                                print(f"매도: {coin} {stay[coin]}")
-                            else:
-                                stay[coin][0] = 1
-                                buy_flag -= 1
-
-                        buy_flag += 1
-
-            tic = 0
+        for k in lost:
+            if k[1] <= now:
+                del k
 
         time.sleep(1)  # 틱 업데이트
-        tic += 1
+
 
 
 if __name__ == '__main__':
