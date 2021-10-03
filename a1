@@ -124,7 +124,7 @@ def ck_day():
                 time.sleep(0.2)
                 df = pyupbit.get_ohlcv(coin,"day", count=3)
                 time.sleep(0.2)
-                cc = sum(df['close']) / 3 / 1.015
+                cc = sum(df['close']) / 3 / 1.01
                 if price <= cc:
                     od = upbit.get_balance(coin)
                     upbit.cancel_order(od[0]['uuid'])
