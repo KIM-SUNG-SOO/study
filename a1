@@ -164,7 +164,7 @@ def ck_min(tickers):
             buy_price = float(t[i]['avg_buy_price'])
 
             if coin in tickers and coin != "KRW-VTHO":
-                if locked > 0 and buy_price <= 3000:
+                if locked > 0 and (buy_price <= 3000 or prices[coin] <= buy_price / 1.05):
                     lost.append([ coin, now + datetime.timedelta(minutes=1) ])
 
 
@@ -210,7 +210,7 @@ def worker(tickers):
 
     cash = upbit.get_balance()
 
-    buy_flag = 20
+    buy_flag = 15
 
     prices = get_prices(tickers)
     time.sleep(0.2)
@@ -336,14 +336,16 @@ def worker(tickers):
             stay[coin][5] = round(((stay[coin][1] / stay[coin][4]) - 1) * 100, 2)
 
             stay[coin][6] = round((stay[coin][3] / stay[coin][2] - 1) * 100, 2)  # 최저대비 백분율
-
+            """
             if price >= 1000000:
                 up_t = 1.01
             elif 1000000 > price >= 100000:
                 up_t = 1.015
             else:
                 up_t = 1.02
-
+            """
+            up_t = 1.01
+            
             # 매도/매수 구분
             if stay[coin][0] == 0 and buy_flag > 0 and price >= hma3 * up_t:
                 if price >= stay[coin][2] * up_t and price >= chv[coin][-2] and curr_ma5 >= curr_ma15 and curr_ma5 <= curr_ma15 * up_t:
